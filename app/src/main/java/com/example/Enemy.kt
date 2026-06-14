@@ -40,6 +40,15 @@ class Enemy : Poolable {
     var bossPhase: Int = 1
     var screenShakeTriggered: Boolean = false
 
+    // Boss specific behavioral timers
+    var bossChargeTimer: Float = 4f
+    var bossChargeCooldown: Float = 4.5f
+    var bossIsChargingCount: Float = 0f
+    var bossChargeVx: Float = 0f
+    var bossChargeVy: Float = 0f
+    var bossPrepTimer: Float = 0f
+    var bossRadialTimer: Float = 1.5f
+
     // A* Pathfinding optimizations
     var pathUpdateTimer: Float = 0f
     private val pathUpdateInterval: Float = 0.4f // Recalculate pathway every 400ms to save CPU
@@ -63,6 +72,13 @@ class Enemy : Poolable {
         attackCooldown = 0f
         bossPhase = 1
         screenShakeTriggered = false
+        bossChargeTimer = 4f
+        bossChargeCooldown = 4.5f
+        bossIsChargingCount = 0f
+        bossChargeVx = 0f
+        bossChargeVy = 0f
+        bossPrepTimer = 0f
+        bossRadialTimer = 1.5f
         pathUpdateTimer = 0f
         currentPath.clear()
         currentPathIndex = 0
@@ -101,10 +117,19 @@ class Enemy : Poolable {
                 damage = 12f * difficultyMultiplier
             }
             EnemyType.BOSS -> {
-                radius = 45f
+                radius = 60f // 3x standard MELEE enemy size
                 maxHp = 350f * difficultyMultiplier
-                speed = 90f + (floor * 2f)
+                speed = 100f + (floor * 2f)
                 damage = 20f * difficultyMultiplier
+                
+                // Initialize timers
+                bossChargeTimer = 4f
+                bossChargeCooldown = 4.5f
+                bossIsChargingCount = 0f
+                bossChargeVx = 0f
+                bossChargeVy = 0f
+                bossPrepTimer = 0f
+                bossRadialTimer = 1.0f
             }
         }
         currentHp = maxHp
@@ -137,12 +162,70 @@ class Enemy : Poolable {
         val dyVec = player.y - y
         val distToPlayer = Math.hypot(dxVec.toDouble(), dyVec.toDouble()).toFloat()
 
-        // Phase check for Bosses
+        // Phase check & Boss Mechanics
         if (type == EnemyType.BOSS) {
-            if (bossPhase == 1 && currentHp <= maxHp * 0.5f) {
-                bossPhase = 2
-                speed *= 1.4f // Frenzy phase
-                onScreenShakeRequest() // Shake screen when boss rages to Phase 2
+            val hpPct = currentHp / maxHp
+            val newPhase = when {
+                hpPct <= 0.33f -> 3
+                hpPct <= 0.66f -> 2
+                else -> 1
+            }
+            if (newPhase != bossPhase) {
+                bossPhase = newPhase
+                onScreenShakeRequest() // Shake screen on phase transition
+            }
+
+            // Charge attack processing (Phase 1 & Phase 3)
+            if (bossIsChargingCount > 0f) {
+                bossIsChargingCount -= dtSec
+                val nextX = x + bossChargeVx * dtSec
+                val nextY = y + bossChargeVy * dtSec
+                val tx = (nextX / tileSize).toInt()
+                val ty = (nextY / tileSize).toInt()
+                if (ty in dungeon.indices && tx in dungeon[ty].indices && dungeon[ty][tx] != DungeonGenerator.TILE_WALL) {
+                    x = nextX
+                    y = nextY
+                } else {
+                    bossIsChargingCount = 0f // Collided with wall, stop charge
+                }
+                
+                // Deal contact damage while charging
+                if (distToPlayer < (radius + player.radius) && attackCooldown <= 0f) {
+                    player.takeDamage(damage * 1.5f) // High charge damage
+                    attackCooldown = meleeCooldown
+                }
+                return // Bypasses regular pathfinding and FSM movement
+            }
+
+            if (bossPrepTimer > 0f) {
+                bossPrepTimer -= dtSec
+                if (bossPrepTimer <= 0f) {
+                    if (distToPlayer > 10f) {
+                        bossIsChargingCount = 0.8f // Rush duration
+                        bossChargeVx = (dxVec / distToPlayer) * speed * 3.5f
+                        bossChargeVy = (dyVec / distToPlayer) * speed * 3.5f
+                    }
+                }
+                return // Frozen in warning phase
+            }
+
+            // Recharge charging trigger (Phases 1 and 3)
+            if (bossPhase == 1 || bossPhase == 3) {
+                bossChargeTimer -= dtSec
+                if (bossChargeTimer <= 0f) {
+                    bossChargeTimer = bossChargeCooldown
+                    bossPrepTimer = 0.6f // Charge prep warning
+                }
+            }
+
+            // Radial spread attack trigger (Phases 2 and 3)
+            if (bossPhase == 2 || bossPhase == 3) {
+                bossRadialTimer -= dtSec
+                if (bossRadialTimer <= 0f) {
+                    bossRadialTimer = if (bossPhase == 2) 1.5f else 2.0f
+                    val bCount = if (bossPhase == 2) 16 else 12
+                    fireSpreadAttack(tileSizeNormal = tileSize, bulletPool, activeBullets, bulletCount = bCount)
+                }
             }
         }
 
@@ -258,16 +341,8 @@ class Enemy : Poolable {
                 attackCooldown = rangedCooldown
             }
             EnemyType.BOSS -> {
-                if (bossPhase == 1) {
-                    // Phase 1: Melee strike + dual ring blast
-                    player.takeDamage(damage)
-                    fireSpreadAttack(tileSizeNormal = 40, bulletPool, activeBullets, bulletCount = 8)
-                    attackCooldown = bossCooldown
-                } else {
-                    // Phase 2 Frenzy: Fire continuous chaotic spiral projectiles
-                    fireSpreadAttack(tileSizeNormal = 40, bulletPool, activeBullets, bulletCount = 14)
-                    attackCooldown = bossCooldown * 0.6f
-                }
+                player.takeDamage(damage * 0.5f)
+                attackCooldown = bossCooldown
             }
         }
     }
@@ -391,49 +466,102 @@ class Enemy : Poolable {
         // Drop shadow
         paint.color = Color.BLACK
         paint.alpha = 110
-        canvas.drawCircle(x, y + radius * 0.3f, radius * 0.9f, paint)
+        if (type == EnemyType.BOSS) {
+            drawOctagon(canvas, x, y + radius * 0.2f, radius, paint)
+        } else {
+            canvas.drawCircle(x, y + radius * 0.3f, radius * 0.9f, paint)
+        }
         paint.alpha = 255
 
         // Core fill based on hostile classification
         if (hitFlashTimer > 0f) {
             paint.color = Color.RED
-            canvas.drawCircle(x, y, radius, paint)
+            if (type == EnemyType.BOSS) {
+                drawOctagon(canvas, x, y, radius, paint)
+            } else {
+                canvas.drawCircle(x, y, radius, paint)
+            }
         } else {
-            when (type) {
-                EnemyType.MELEE -> {
-                    // Fierce dark red cyberpunk color
-                    paint.color = Color.parseColor("#FF2222")
+            if (type == EnemyType.BOSS) {
+                // Draw Boss regular octagon layers
+                paint.color = if (bossPhase == 2) Color.parseColor("#FF003C") else if (bossPhase == 3) Color.parseColor("#9B0000") else Color.parseColor("#E61C1C")
+                drawOctagon(canvas, x, y, radius, paint)
+
+                // Tactical inner octagon
+                paint.color = Color.parseColor("#0A0A0A")
+                drawOctagon(canvas, x, y, radius * 0.6f, paint)
+
+                // Glowing core octagon
+                paint.color = if (bossPhase == 3) Color.parseColor("#00FFFF") else if (bossPhase == 2) Color.parseColor("#FFAA00") else Color.parseColor("#FF2222")
+                drawOctagon(canvas, x, y, radius * 0.35f, paint)
+
+                // Dynamic counter-pulsing rifting shield rings around the boss on HIGH-END devices
+                if (PerformanceManager.selectedTier == MemoryTier.HIGH) {
+                    val originalStyle = paint.style
+                    val originalWidth = paint.strokeWidth
+                    paint.style = Paint.Style.STROKE
+                    
+                    val pulseTimer = (System.currentTimeMillis() % 4000) / 4000f
+                    val rPulseOffset = 0.15f * Math.sin(pulseTimer * 2 * Math.PI).toFloat()
+                    
+                    // Pulsing core outer glow
+                    paint.strokeWidth = 3f
+                    paint.color = if (bossPhase == 3) Color.parseColor("#00FFFF") else if (bossPhase == 2) Color.parseColor("#FFAA00") else Color.parseColor("#FF003C")
+                    paint.alpha = 140
+                    drawOctagon(canvas, x, y, radius * (1.1f + rPulseOffset), paint)
+                    
+                    // Concentric counter outer boundary
+                    paint.strokeWidth = 1.5f
+                    paint.color = Color.parseColor("#00FFFF")
+                    paint.alpha = 70
+                    drawOctagon(canvas, x, y, radius * (1.3f - rPulseOffset), paint)
+                    
+                    paint.style = originalStyle
+                    paint.strokeWidth = originalWidth
+                    paint.alpha = 255
                 }
-                EnemyType.RANGED -> {
-                    // Menacing deep purple cyber color
-                    paint.color = Color.parseColor("#BF55EC")
+                
+                // If preparing to charge, draw warning outline glow
+                if (bossPrepTimer > 0f) {
+                    val originalStyle = paint.style
+                    val originalWidth = paint.strokeWidth
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = 6f
+                    paint.color = Color.YELLOW
+                    drawOctagon(canvas, x, y, radius + 10f * (bossPrepTimer / 0.6f), paint)
+                    paint.style = originalStyle
+                    paint.strokeWidth = originalWidth
                 }
-                EnemyType.BOSS -> {
-                    // Boss is fiery bright red with active glowing core rings
-                    if (bossPhase == 2) {
-                        paint.color = Color.parseColor("#FF003C") // Frenzy supercharged magenta-red
-                    } else {
-                        paint.color = Color.parseColor("#E61C1C")
+            } else {
+                when (type) {
+                    EnemyType.MELEE -> {
+                        paint.color = Color.parseColor("#FF2222")
+                    }
+                    EnemyType.RANGED -> {
+                        paint.color = Color.parseColor("#BF55EC")
+                    }
+                    EnemyType.BOSS -> {
+                        paint.color = Color.RED
                     }
                 }
-            }
-            canvas.drawCircle(x, y, radius, paint)
+                canvas.drawCircle(x, y, radius, paint)
 
-            // Draw tactical inner ring core
-            paint.color = Color.parseColor("#0A0A0A")
-            canvas.drawCircle(x, y, radius * 0.6f, paint)
+                // Draw tactical inner ring core
+                paint.color = Color.parseColor("#0A0A0A")
+                canvas.drawCircle(x, y, radius * 0.6f, paint)
 
-            // Draw core glowing energy cell
-            when (type) {
-                EnemyType.MELEE -> paint.color = Color.parseColor("#FF3B3B")
-                EnemyType.RANGED -> paint.color = Color.parseColor("#D2527F")
-                EnemyType.BOSS -> paint.color = if (bossPhase == 2) Color.parseColor("#FFAA00") else Color.parseColor("#FF2222")
+                // Draw core glowing energy cell
+                when (type) {
+                    EnemyType.MELEE -> paint.color = Color.parseColor("#FF3B3B")
+                    EnemyType.RANGED -> paint.color = Color.parseColor("#D2527F")
+                    else -> paint.color = Color.RED
+                }
+                canvas.drawCircle(x, y, radius * 0.35f, paint)
             }
-            canvas.drawCircle(x, y, radius * 0.35f, paint)
         }
 
         // Simple health slider bar above their heads for damaged enemies or bosses
-        if (currentHp < maxHp) {
+        if (currentHp < maxHp && type != EnemyType.BOSS) {
             val barW = radius * 1.6f
             val barH = 6f
             val bx = x - barW / 2
@@ -445,8 +573,25 @@ class Enemy : Poolable {
 
             // Dynamic green/health layer
             val healthPercent = (currentHp / maxHp).coerceIn(0f, 1f)
-            paint.color = if (type == EnemyType.BOSS) Color.RED else Color.GREEN
+            paint.color = Color.GREEN
             canvas.drawRect(bx, by, bx + (barW * healthPercent), by + barH, paint)
         }
+    }
+
+    private fun drawOctagon(canvas: Canvas, cx: Float, cy: Float, r: Float, paint: Paint) {
+        val path = android.graphics.Path()
+        val angleStep = Math.PI / 4.0
+        for (i in 0 until 8) {
+            val angle = i * angleStep
+            val px = cx + (r * Math.cos(angle)).toFloat()
+            val py = cy + (r * Math.sin(angle)).toFloat()
+            if (i == 0) {
+                path.moveTo(px, py)
+            } else {
+                path.lineTo(px, py)
+            }
+        }
+        path.close()
+        canvas.drawPath(path, paint)
     }
 }

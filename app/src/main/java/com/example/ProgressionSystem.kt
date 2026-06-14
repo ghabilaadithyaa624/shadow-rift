@@ -99,7 +99,7 @@ class ProgressionRepository(private val dao: ProgressionDao) {
                     SkillNode(
                         "speed",
                         "Phasing Sprints",
-                        "Increases movement速度 by +8% per level.",
+                        "Increases movement speed by +8% per level.",
                         0, 5, 30, 1.8f, 0.08f
                     ),
                     SkillNode(

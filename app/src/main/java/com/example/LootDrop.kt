@@ -13,6 +13,9 @@ enum class LootRarity {
 class LootDrop : Poolable {
     var x: Float = 0f
     var y: Float = 0f
+    var vx: Float = 0f
+    var vy: Float = 0f
+    val friction: Float = 0.92f
     var value: Int = 5
     var rarity: LootRarity = LootRarity.COMMON
     var radius: Float = 14f
@@ -22,6 +25,8 @@ class LootDrop : Poolable {
     override fun reset() {
         x = 0f
         y = 0f
+        vx = 0f
+        vy = 0f
         value = 5
         rarity = LootRarity.COMMON
         radius = 14f
@@ -32,6 +37,8 @@ class LootDrop : Poolable {
     fun configure(spawnX: Float, spawnY: Float, rollChance: Double) {
         x = spawnX
         y = spawnY
+        vx = 0f
+        vy = 0f
         isActive = true
 
         // Roll rarity percentages (2% Epic, 18% Rare, 80% Common)

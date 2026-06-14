@@ -47,6 +47,8 @@ class GameLoop(
         var frameCount = 0
 
         while (isPlaying) {
+            val frameStartTime = System.nanoTime()
+
             val currentTime = System.nanoTime()
             val elapsed = currentTime - lastUpdateTime
             lastUpdateTime = currentTime
@@ -86,6 +88,21 @@ class GameLoop(
                 updateCount = 0
                 frameCount = 0
                 lastStatTime = nowMs
+            }
+
+            // Precision frame rate cap pacing using Thread sleep
+            val currentTargetFps = PerformanceManager.targetFps
+            val targetFrameTimeNs = 1_000_000_000L / currentTargetFps
+            val frameTimeNs = System.nanoTime() - frameStartTime
+            val remainingSleepNs = targetFrameTimeNs - frameTimeNs
+            if (remainingSleepNs > 0) {
+                try {
+                    val sleepMs = remainingSleepNs / 1_000_000L
+                    val sleepNs = (remainingSleepNs % 1_000_000L).toInt()
+                    Thread.sleep(sleepMs, sleepNs)
+                } catch (e: Exception) {
+                    // Ignore transient wake events
+                }
             }
         }
     }

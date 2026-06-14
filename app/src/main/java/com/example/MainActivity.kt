@@ -12,6 +12,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -40,6 +42,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Initialize PerformanceManager
+        PerformanceManager.init(this)
+
         // Initialize Database connections
         val database = AppGameDatabase.getDatabase(this)
         repository = ProgressionRepository(database.progressionDao())
@@ -57,17 +62,69 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     containerColor = Color(0xFF0A0A0A) // Sophisticated dark background
                 ) { innerPadding ->
-                    MainGameDashboard(
-                        repository = repository,
-                        modifier = Modifier.padding(innerPadding),
-                        onLaunchGame = {
-                            val intent = Intent(this, GameActivity::class.java)
-                            startActivity(intent)
-                        },
-                        onPlayClickHaptic = {
-                            triggerTickHaptics()
+                    var isOptimizing by remember { mutableStateOf(!PerformanceManager.isOptimizingAtStartupDone) }
+
+                    if (isOptimizing) {
+                        // Show brief loading screen of device-optimization
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFF050505)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "SHADOW RIFT",
+                                    color = Color(0xFF00FFFF),
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 4.sp
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                CircularProgressIndicator(
+                                    color = Color(0xFF00FFFF),
+                                    strokeWidth = 3.dp,
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Spacer(modifier = Modifier.height(24.dp))
+                                Text(
+                                    text = "Optimizing for your device...",
+                                    color = Color(0xFFFF3B3B),
+                                    fontSize = 14.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Detecting Memory & Core allocations...",
+                                    color = Color.Gray,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
                         }
-                    )
+
+                        LaunchedEffect(Unit) {
+                            kotlinx.coroutines.delay(1800) // Brief loading presentation as requested
+                            PerformanceManager.isOptimizingAtStartupDone = true
+                            isOptimizing = false
+                        }
+                    } else {
+                        MainGameDashboard(
+                            repository = repository,
+                            modifier = Modifier.padding(innerPadding),
+                            onLaunchGame = {
+                                val intent = Intent(this@MainActivity, GameActivity::class.java)
+                                startActivity(intent)
+                            },
+                            onPlayClickHaptic = {
+                                triggerTickHaptics()
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -130,11 +187,13 @@ fun MainGameDashboard(
         horizontalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         // --- LEFT COLUMN: MENU ACTIONS & STATS (Weight 4f) ---
+        val scrollState = rememberScrollState()
         Column(
             modifier = Modifier
                 .weight(4f)
-                .fillMaxHeight(),
-            verticalArrangement = Arrangement.SpaceBetween
+                .fillMaxHeight()
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Title Header Details
             Column {
@@ -155,15 +214,15 @@ fun MainGameDashboard(
                     letterSpacing = 1.sp,
                     modifier = Modifier.padding(top = 4.dp)
                 )
-                Spacer(modifier = Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
                 // Stats Dashboard Container
                 Text(
                     text = "EXPEDITION INTELLIGENCE",
                     color = Color.White,
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier.padding(bottom = 6.dp)
                 )
                 
                 Column(
@@ -171,14 +230,161 @@ fun MainGameDashboard(
                         .fillMaxWidth()
                         .background(Color(0xFF111111), RoundedCornerShape(12.dp))
                         .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                        .padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     StatRow("EXPEDITIONS INITIATED", "${playerProfile?.runsCount ?: 0}")
                     StatRow("RIPS CLEARED (KILLS)", "${playerProfile?.totalKills ?: 0}")
                     StatRow("MAX DEPTH PENETRATED", "FLOOR ${playerProfile?.highestFloor ?: 1}")
                 }
+
+                // Performance settings config component
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "PERFORMANCE CORE",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+
+                val context = androidx.compose.ui.platform.LocalContext.current
+                var activeTier by remember { mutableStateOf(PerformanceManager.selectedTier) }
+                val targetDetails = when (PerformanceManager.detectedTier) {
+                    MemoryTier.LOW -> "3GB"
+                    MemoryTier.MID -> "4-5GB"
+                    MemoryTier.HIGH -> "6GB+"
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF111111), RoundedCornerShape(12.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "DETECTED RAM TIER:",
+                            color = Color.Gray,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "${PerformanceManager.detectedTier} ($targetDetails target)",
+                            color = Color(0xFF00FFFF),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "ACTIVE PROFILE:",
+                            color = Color.Gray,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "$activeTier" + (if (PerformanceManager.isManualOverrideActive(context)) " (MANUAL)" else " (AUTO)"),
+                            color = if (PerformanceManager.isManualOverrideActive(context)) Color(0xFFFFD700) else Color(0xFF00FF66),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    Text(
+                        text = "MANUALLY OVERRIDE TIER:",
+                        color = Color.DarkGray,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(MemoryTier.LOW, MemoryTier.MID, MemoryTier.HIGH).forEach { tier ->
+                            val isSelected = activeTier == tier && PerformanceManager.isManualOverrideActive(context)
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .background(
+                                        if (isSelected) Color(0xFF00FFFF).copy(alpha = 0.15f) else Color(0xFF1B1B1B),
+                                        RoundedCornerShape(6.dp)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isSelected) Color(0xFF00FFFF) else Color.White.copy(alpha = 0.05f),
+                                        RoundedCornerShape(6.dp)
+                                    )
+                                    .clickable {
+                                        onPlayClickHaptic()
+                                        PerformanceManager.setManualTier(context, tier)
+                                        activeTier = PerformanceManager.selectedTier
+                                    }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = tier.name,
+                                    color = if (isSelected) Color(0xFF00FFFF) else Color.Gray,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+
+                        // Auto selector option
+                        val isAuto = !PerformanceManager.isManualOverrideActive(context)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .background(
+                                    if (isAuto) Color(0xFF00FF66).copy(alpha = 0.15f) else Color(0xFF1B1B1B),
+                                    RoundedCornerShape(6.dp)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isAuto) Color(0xFF00FF66) else Color.White.copy(alpha = 0.05f),
+                                    RoundedCornerShape(6.dp)
+                                )
+                                .clickable {
+                                    onPlayClickHaptic()
+                                    PerformanceManager.setManualTier(context, null)
+                                    activeTier = PerformanceManager.selectedTier
+                                }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "AUTO",
+                                color = if (isAuto) Color(0xFF00FF66) else Color.Gray,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
             }
+
+            Spacer(modifier = Modifier.height(20.dp))
 
             // Launch Platform Button
             Button(

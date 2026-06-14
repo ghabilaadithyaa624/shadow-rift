@@ -35,6 +35,7 @@ class GameView @JvmOverloads constructor(
     interface GameListener {
         fun onPlayerDeath(floorReached: Int, kills: Int, essenceEarned: Int)
         fun onVictory()
+        fun onLevelUp(level: Int, onStatSelected: (statType: Int) -> Unit)
     }
 
     var gameListener: GameListener? = null
@@ -44,6 +45,39 @@ class GameView @JvmOverloads constructor(
     var gameFloor = 1
     var sessionKills = 0
     var sessionEssence = 0
+    
+    // XP and level progression
+    var playerXp = 0
+    var playerLevel = 1
+    val xpNeeded = 100
+
+    fun addPlayerXp(amount: Int) {
+        playerXp += amount
+        if (playerXp >= xpNeeded) {
+            playerXp -= xpNeeded
+            playerLevel++
+            
+            // Pauses the execution loop
+            pause()
+            
+            // Fires UI dialogue thread-safely
+            gameListener?.onLevelUp(playerLevel) { statSelected ->
+                when (statSelected) {
+                    0 -> { // +15% Damage / ATK
+                        player.baseDamage *= 1.15f
+                    }
+                    1 -> { // +20 Max HP
+                        player.maxHp += 20f
+                        player.currentHp = (player.currentHp + 20f).coerceAtMost(player.maxHp)
+                    }
+                    2 -> { // +10% Speed
+                        player.moveSpeed *= 1.10f
+                    }
+                }
+                resume()
+            }
+        }
+    }
     
     // Level grid properties
     val tileSize = 70 // Grid tile size in pixels
@@ -127,8 +161,8 @@ class GameView @JvmOverloads constructor(
         }
     }
 
-    // LRU Sprite/Texture Pre-Render Image Cache (64MB Max Target)
-    private val maxCacheBytes = 64 * 1024 * 1024 // 64 MegaBytes Limit
+    // LRU Sprite/Texture Pre-Render Image Cache based on memory tier
+    private val maxCacheBytes = PerformanceManager.spriteCacheSizeMb * 1024 * 1024
     private val spriteCache = object : LruCache<String, Bitmap>(maxCacheBytes) {
         override fun sizeOf(key: String, value: Bitmap): Int {
             return value.byteCount
@@ -183,51 +217,58 @@ class GameView @JvmOverloads constructor(
         // Floor tile pre-rendered texture
         val floorTile = Bitmap.createBitmap(tileSize, tileSize, Bitmap.Config.ARGB_8888)
         val canvasFloor = Canvas(floorTile)
-        canvasFloor.drawColor(Color.parseColor("#0F0F0F")) // Deep slate
+        canvasFloor.drawColor(Color.parseColor("#0D0D0D")) // Dark floor #0D0D0D
         val tilePaint = Paint().apply {
-            color = Color.parseColor("#181818")
+            color = Color.parseColor("#151515") // Subtle grid border
             style = Paint.Style.STROKE
-            strokeWidth = 3f
+            strokeWidth = 2f
         }
         canvasFloor.drawRect(0f, 0f, tileSize.toFloat(), tileSize.toFloat(), tilePaint)
-        // Add random cyber dot details for a dark-dungeon matrix grid style
+        // Draw a glowing cyber cyan dot in the center of each floor tile for a grid-dot style
         tilePaint.color = Color.parseColor("#00FFFF")
-        tilePaint.alpha = 50
-        canvasFloor.drawCircle(tileSize / 2f, tileSize / 2f, 2f, tilePaint)
+        tilePaint.style = Paint.Style.FILL
+        tilePaint.alpha = 60
+        canvasFloor.drawCircle(tileSize / 2f, tileSize / 2f, 2.5f, tilePaint)
         spriteCache.put("tile_floor", floorTile)
 
         // Wall tile pre-rendered texture
         val wallTile = Bitmap.createBitmap(tileSize, tileSize, Bitmap.Config.ARGB_8888)
         val canvasWall = Canvas(wallTile)
-        canvasWall.drawColor(Color.parseColor("#030303"))
+        canvasWall.drawColor(Color.parseColor("#1A1A2E")) // Dark gray walls #1A1A2E
         val wallPaint = Paint().apply {
-            color = Color.parseColor("#FF3B3B") // Neon red glowing borders
+            color = Color.parseColor("#2A2A44") // Slightly lighter modern grid-gray outlines
             style = Paint.Style.STROKE
-            strokeWidth = 4f
-            alpha = 150
+            strokeWidth = 3f
         }
         canvasWall.drawRect(0f, 0f, tileSize.toFloat(), tileSize.toFloat(), wallPaint)
-        // Draw inner brick segments
-        wallPaint.strokeWidth = 2f
-        canvasWall.drawLine(0f, tileSize / 2f, tileSize.toFloat(), tileSize / 2f, wallPaint)
-        canvasWall.drawLine(tileSize / 2f, 0f, tileSize / 2f, tileSize / 2f, wallPaint)
-        canvasWall.drawLine(tileSize * 0.75f, tileSize / 2f, tileSize * 0.75f, tileSize.toFloat(), wallPaint)
+        // Additional sleek interior segments for depth
+        canvasWall.drawRect(6f, 6f, (tileSize - 6).toFloat(), (tileSize - 6).toFloat(), wallPaint)
         spriteCache.put("tile_wall", wallTile)
 
-        // Stairs tile pre-rendered texture
+        // Stairs level exit: glowing cyan EXIT portal
         val stairsTile = Bitmap.createBitmap(tileSize, tileSize, Bitmap.Config.ARGB_8888)
         val canvasStairs = Canvas(stairsTile)
-        canvasStairs.drawColor(Color.parseColor("#0A0A0A"))
+        canvasStairs.drawColor(Color.parseColor("#0D0D0D")) // Renders inline with floor background
         val stairsPaint = Paint().apply {
-            color = Color.parseColor("#00FFFF")
-            style = Paint.Style.FILL
+            color = Color.parseColor("#00FFFF") // Cyan color
+            isAntiAlias = true
         }
-        // Draw a glowing pyramid dimensional rift portal
-        stairsPaint.alpha = 130
-        canvasStairs.drawRect(20f, 20f, tileSize - 20f, tileSize - 20f, stairsPaint)
-        stairsPaint.color = Color.WHITE
+        
+        // Outer pulsing ring aura
+        stairsPaint.style = Paint.Style.STROKE
+        stairsPaint.strokeWidth = 4f
+        stairsPaint.alpha = 90
+        canvasStairs.drawCircle(tileSize / 2f, tileSize / 2f, tileSize * 0.4f, stairsPaint)
+
+        // Inner ring
+        stairsPaint.strokeWidth = 3f
+        stairsPaint.alpha = 170
+        canvasStairs.drawCircle(tileSize / 2f, tileSize / 2f, tileSize * 0.28f, stairsPaint)
+
+        // Core shining energy vortex
+        stairsPaint.style = Paint.Style.FILL
         stairsPaint.alpha = 255
-        canvasStairs.drawRect(30f, 30f, tileSize - 30f, tileSize - 30f, stairsPaint)
+        canvasStairs.drawCircle(tileSize / 2f, tileSize / 2f, tileSize * 0.15f, stairsPaint)
         spriteCache.put("tile_stairs", stairsTile)
     }
 
@@ -238,6 +279,8 @@ class GameView @JvmOverloads constructor(
         gameFloor = 1
         sessionKills = 0
         sessionEssence = 0
+        playerXp = 0
+        playerLevel = 1
         player.applySkillUpgrades(unlockedSkills)
         setupLevel(gameFloor)
     }
@@ -274,8 +317,6 @@ class GameView @JvmOverloads constructor(
     }
 
     private fun spawnEntitiesForFloor(floor: Int) {
-        val count = 8 + (floor * 2)
-
         if (floor % 5 == 0) {
             // Level is multiple of 5: Spawns the Phase-Based Rift Overlord Boss
             val boss = enemyPool.obtain()
@@ -286,16 +327,32 @@ class GameView @JvmOverloads constructor(
 
             showTemporaryMessage("RIFT RULER AWAKENS! DANGER!", 4.0f)
         } else {
-            // Spawn normal cyber combat units
-            var spawned = 0
-            while (spawned < count) {
-                val rx = (2 until dungeonWidth - 2).random()
-                val ry = (2 until dungeonHeight - 2).random()
-
-                // Ensure selected tile is floor and isn't too close to player start point
-                if (dungeonResult.grid[ry][rx] == DungeonGenerator.TILE_FLOOR) {
-                    val distToSpawn = Math.hypot((rx - dungeonResult.spawnX).toDouble(), (ry - dungeonResult.spawnY).toDouble())
-                    if (distToSpawn > 10) {
+            // Place enemies randomly depending on the active Memory/CPU Tier configuration bounds
+            for (roomIndex in dungeonResult.rooms.indices) {
+                val room = dungeonResult.rooms[roomIndex]
+                val enemyCount = when (PerformanceManager.selectedTier) {
+                    MemoryTier.LOW -> (2..3).random()
+                    MemoryTier.MID -> (3..5).random()
+                    MemoryTier.HIGH -> (4..8).random()
+                }
+                for (i in 0 until enemyCount) {
+                    var spawned = false
+                    var attempts = 0
+                    while (!spawned && attempts < 50) {
+                        attempts++
+                        val rx = (room.x until room.x + room.w).random()
+                        val ry = (room.y until room.y + room.h).random()
+                        
+                        // Check distance to spawn point
+                        val dx = rx - dungeonResult.spawnX
+                        val dy = ry - dungeonResult.spawnY
+                        val dist = Math.hypot(dx.toDouble(), dy.toDouble())
+                        
+                        // If it's starting room, don't spawn within 3 tiles of spawn point
+                        if (roomIndex == 0 && dist < 3.0) {
+                            continue
+                        }
+                        
                         val enemy = enemyPool.obtain()
                         val type = if (Math.random() < 0.4) EnemyType.RANGED else EnemyType.MELEE
                         enemy.configure(
@@ -305,7 +362,7 @@ class GameView @JvmOverloads constructor(
                             floor
                         )
                         activeEnemies.add(enemy)
-                        spawned++
+                        spawned = true
                     }
                 }
             }
@@ -313,8 +370,9 @@ class GameView @JvmOverloads constructor(
     }
 
     fun triggerScreenShake(duration: Float, intensity: Float) {
+        if (!PerformanceManager.isScreenShakeEnabled) return
         shakeDuration = duration
-        shakeIntensity = intensity
+        shakeIntensity = intensity * PerformanceManager.screenShakeIntensityMultiplier
     }
 
     fun showTemporaryMessage(msg: String, duration: Float) {
@@ -467,27 +525,46 @@ class GameView @JvmOverloads constructor(
                                 createDeathSparks(enemy.x, enemy.y, if (enemy.type == EnemyType.BOSS) Color.RED else Color.GREEN)
 
                                 // Floating damage number for enemy (+red)
-                                val displayDamage = if (enemy.type == EnemyType.BOSS) bullet.damage.toInt() else (enemy.maxHp / 3f).toInt()
-                                activeDamageNumbers.add(
-                                    DamageNumber(
-                                        enemy.x + (Math.random() * 20 - 10).toFloat(),
-                                        enemy.y - 12f + (Math.random() * 20 - 10).toFloat(),
-                                        "+$displayDamage",
-                                        Color.RED
+                                if (PerformanceManager.isFloatingDamageNumbersEnabled) {
+                                    val displayDamage = if (enemy.type == EnemyType.BOSS) bullet.damage.toInt() else (enemy.maxHp / 3f).toInt()
+                                    activeDamageNumbers.add(
+                                        DamageNumber(
+                                            enemy.x + (Math.random() * 20 - 10).toFloat(),
+                                            enemy.y - 12f + (Math.random() * 20 - 10).toFloat(),
+                                            "+$displayDamage",
+                                            Color.RED
+                                        )
                                     )
-                                )
+                                }
 
                                 if (died) {
                                     sessionKills++
                                     triggerKillHaptics()
-                                    // Spawns items
-                                    val loot = lootPool.obtain()
-                                    loot.configure(enemy.x, enemy.y, Math.random())
-                                    activeLoot.add(loot)
                                     
+                                    val xpGained = if (enemy.type == EnemyType.BOSS) 100 else 25
+                                    addPlayerXp(xpGained)
+
                                     if (enemy.type == EnemyType.BOSS) {
                                         triggerScreenShake(1.5f, 25f)
-                                        showTemporaryMessage("RIFT RULER VANQUISHED!", 3.5f)
+                                        showTemporaryMessage("FLOOR CLEARED", 4.0f)
+                                        
+                                        // Spawn a highly animated fountain of 12 loot drops scattering in all directions!
+                                        for (i in 0 until 12) {
+                                            val loot = lootPool.obtain()
+                                            val rChance = Math.random()
+                                            loot.configure(enemy.x, enemy.y, rChance)
+                                            
+                                            val angle = (2 * Math.PI * Math.random())
+                                            val blastSpeed = (300f + 250f * Math.random()).toFloat()
+                                            loot.vx = Math.cos(angle).toFloat() * blastSpeed
+                                            loot.vy = Math.sin(angle).toFloat() * blastSpeed
+                                            activeLoot.add(loot)
+                                        }
+                                    } else {
+                                        // Standard simple single loot drop
+                                        val loot = lootPool.obtain()
+                                        loot.configure(enemy.x, enemy.y, Math.random())
+                                        activeLoot.add(loot)
                                     }
                                 }
                                 break
@@ -505,14 +582,16 @@ class GameView @JvmOverloads constructor(
                             triggerScreenShake(0.2f, 15f) // Screen shake for 200ms when player takes damage
 
                             // Floating damage number for player (-red)
-                            activeDamageNumbers.add(
-                                DamageNumber(
-                                    player.x + (Math.random() * 20 - 10).toFloat(),
-                                    player.y - 12f + (Math.random() * 20 - 10).toFloat(),
-                                    "-${bullet.damage.toInt()}",
-                                    Color.RED
+                            if (PerformanceManager.isFloatingDamageNumbersEnabled) {
+                                activeDamageNumbers.add(
+                                    DamageNumber(
+                                        player.x + (Math.random() * 20 - 10).toFloat(),
+                                        player.y - 12f + (Math.random() * 20 - 10).toFloat(),
+                                        "-${bullet.damage.toInt()}",
+                                        Color.RED
+                                    )
                                 )
-                            )
+                            }
 
                             if (player.currentHp <= 0) {
                                 triggerScreenShake(2.0f, 35f)
@@ -564,14 +643,16 @@ class GameView @JvmOverloads constructor(
                         contactDamageTextCooldown -= dtSec
                         if (contactDamageTextCooldown <= 0f) {
                             contactDamageTextCooldown = 0.1f
-                            activeDamageNumbers.add(
-                                DamageNumber(
-                                    player.x + (Math.random() * 30 - 15).toFloat(),
-                                    player.y - 12f + (Math.random() * 20 - 10).toFloat(),
-                                    "-1",
-                                    Color.RED
+                            if (PerformanceManager.isFloatingDamageNumbersEnabled) {
+                                activeDamageNumbers.add(
+                                    DamageNumber(
+                                        player.x + (Math.random() * 30 - 15).toFloat(),
+                                        player.y - 12f + (Math.random() * 20 - 10).toFloat(),
+                                        "-1",
+                                        Color.RED
+                                    )
                                 )
-                            )
+                            }
                         }
                         
                         if (player.currentHp <= 0) {
@@ -607,10 +688,24 @@ class GameView @JvmOverloads constructor(
             }
         }
 
+        // Keep active particle count strictly within selected tier limits
+        val curMaxParticles = PerformanceManager.maxParticles
+        while (activeParticles.size > curMaxParticles) {
+            val oldest = activeParticles.removeAt(0)
+            particlePool.recycle(oldest)
+        }
+
         // Update Loot Drops Collection
         val lootIterator = activeLoot.iterator()
         while (lootIterator.hasNext()) {
             val loot = lootIterator.next()
+            
+            // Apply physics momentum slide
+            loot.x += loot.vx * dtSec
+            loot.y += loot.vy * dtSec
+            loot.vx *= loot.friction
+            loot.vy *= loot.friction
+
             val dist = Math.hypot((player.x - loot.x).toDouble(), (player.y - loot.y).toDouble())
             if (dist < (player.radius + loot.radius)) {
                 sessionEssence += loot.value
@@ -637,8 +732,13 @@ class GameView @JvmOverloads constructor(
     }
 
     private fun createDeathSparks(sx: Float, sy: Float, col: Int) {
-        val sparkVolume = 24
-        for (i in 0 until sparkVolume) {
+        val maxAllowed = PerformanceManager.maxParticles
+        val currentCount = activeParticles.size
+        if (currentCount >= maxAllowed) return
+
+        val sparkVolume = if (PerformanceManager.selectedTier == MemoryTier.LOW) 8 else 24
+        val spawnCount = sparkVolume.coerceAtMost(maxAllowed - currentCount)
+        for (i in 0 until spawnCount) {
             val p = particlePool.obtain()
             val angle = (2 * Math.PI * Math.random())
             val magnitude = (100f + 300f * Math.random()).toFloat()
@@ -660,6 +760,50 @@ class GameView @JvmOverloads constructor(
     override fun draw(canvas: Canvas) {
         super.draw(canvas)
         canvas.drawColor(Color.parseColor("#0A0A0A")) // Dark theme paint background
+
+        val width = canvas.width
+        val height = canvas.height
+
+        // Dynamic cyber background styling depending on active performance tiers
+        if (PerformanceManager.isBackgroundParallaxEnabled) {
+            // Draw flowing matrix digital grids below the game canvas with counter-scrolling parallax
+            paint.color = Color.parseColor("#121212")
+            paint.strokeWidth = 2f
+            paint.style = Paint.Style.STROKE
+            
+            val gridSpacing = 80f
+            val pxOffset = -cameraX * 0.3f
+            val pyOffset = -cameraY * 0.3f
+            
+            val numGridCols = (width / gridSpacing).toInt() + 4
+            val numGridRows = (height / gridSpacing).toInt() + 4
+            
+            val startX = (pxOffset % gridSpacing) - gridSpacing
+            val startY = (pyOffset % gridSpacing) - gridSpacing
+            
+            for (i in -1..numGridCols) {
+                val gx = startX + i * gridSpacing
+                canvas.drawLine(gx, 0f, gx, height.toFloat(), paint)
+            }
+            for (j in -1..numGridRows) {
+                val gy = startY + j * gridSpacing
+                canvas.drawLine(0f, gy, width.toFloat(), gy, paint)
+            }
+            
+            paint.style = Paint.Style.FILL // reset
+        } else if (PerformanceManager.selectedTier == MemoryTier.MID) {
+            // Light scanning line helpers which are extremely lightweight
+            paint.color = Color.parseColor("#0D0D0D")
+            paint.strokeWidth = 1f
+            paint.style = Paint.Style.STROKE
+            val spacing = 40f
+            var gy = 0.0f
+            while (gy < height) {
+                canvas.drawLine(0f, gy, width.toFloat(), gy, paint)
+                gy += spacing
+            }
+            paint.style = Paint.Style.FILL
+        }
 
         canvas.save()
 
@@ -769,7 +913,8 @@ class GameView @JvmOverloads constructor(
         // --- HUD HUD GAUGE OVERLAYS (STATIC CAMERA RENDERING) ---
         hud.draw(
             canvas, player, gameFloor, sessionKills, sessionEssence,
-            width, height, dungeonResult.grid, tileSize, activeEnemies
+            width, height, dungeonResult.grid, tileSize, activeEnemies,
+            playerXp, playerLevel
         )
 
         // Draw Virtual Input Controls
@@ -838,6 +983,9 @@ class GameView @JvmOverloads constructor(
         // Guard against click registers before views dimension binding completes
         val mJ = moveJoystick ?: return true
         val sJ = shootJoystick ?: return true
+
+        val width = if (surfaceWidth > 0) surfaceWidth.toInt() else getWidth()
+        val height = if (surfaceHeight > 0) surfaceHeight.toInt() else getHeight()
 
         // First handle settings toggle tap down check
         if (action == MotionEvent.ACTION_DOWN) {
@@ -988,7 +1136,45 @@ class GameView @JvmOverloads constructor(
         gameLoop?.startLoop()
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+    private var surfaceWidth = 0f
+    private var surfaceHeight = 0f
+    private var isResolutionConfigured = false
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
+        if (!isResolutionConfigured) {
+            val scale = PerformanceManager.resolutionScale
+            if (scale < 1.0f) {
+                isResolutionConfigured = true
+                val scaledW = (w * scale).toInt()
+                val scaledH = (h * scale).toInt()
+                holder.setFixedSize(scaledW, scaledH)
+                return
+            }
+            isResolutionConfigured = true
+        }
+
+        surfaceWidth = w.toFloat()
+        surfaceHeight = h.toFloat()
+
+        // Re-initialize analog sticks relative to the active resolution canvas size
+        moveJoystick = VirtualJoystick(
+            220f,
+            surfaceHeight - 220f,
+            120f,
+            50f,
+            Color.parseColor("#00FFFF"), // Cyber Cyan knob
+            Color.parseColor("#224444")  // Semi-dark container ring
+        )
+
+        shootJoystick = VirtualJoystick(
+            surfaceWidth - 220f,
+            surfaceHeight - 220f,
+            120f,
+            50f,
+            Color.parseColor("#FF3B3B"), // Cyber red strike knob
+            Color.parseColor("#442222")  // Semi-dark attack container
+        )
+    }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         var retry = true
