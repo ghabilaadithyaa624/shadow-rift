@@ -1,0 +1,6 @@
+{
+  "name": "Shadow Rift",
+  "description": "Tactical top-down roguelite dungeon crawler with dual virtual joysticks, smart enemy FSM AI, and room-persisted meta-progression.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
